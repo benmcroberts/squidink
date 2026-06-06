@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "squidink"
+dynamic = ["version"]
+description = "A Python client for the Octopus Energy API."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Benjamin McRoberts", email = "squidinkpy@gmail.com"},
+]
+keywords = ["octopus-energy", "energy", "smart-meter", "api", "kraken"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Home Automation",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/benmcroberts/squidink"
+Issues = "https://github.com/benmcroberts/squidink/issues"
+
+[tool.hatch.version]
+path = "src/squidink/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/squidink"]
