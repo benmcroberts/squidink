@@ -1,32 +1,107 @@
-"""The squidink client and its API selector."""
+"""The squidink client."""
 
-from enum import StrEnum, auto
+from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from datetime import datetime
+from typing import Any, Self
+
+import httpx
 
 from squidink.credentials import Credentials
+from squidink.exceptions import SquidinkAPIError
+from squidink.models import Consumption
+
+OCTOPUS_REST_BASE_URL = "https://api.octopus.energy"
 
 
-class ApiKind(StrEnum):
+class BaseClient(ABC):
+    """Base class for Octopus Energy API clients.
+
+    Subclasses talk to a specific Octopus API (REST, GraphQL) but expose the
+    same operations, so callers do not care which one they hold.
     """
-    Octopus exposes two APIs:
 
-    - ``REST`` — resource-oriented HTTP endpoints, using HTTP Basic auth.
-    - ``GRAPHQL`` — a single GraphQL endpoint, using token (JWT) auth.
-    """
-
-    REST = auto()
-    GRAPHQL = auto()
-
-
-class Client:
-    """A client for the Octopus Energy API."""
-
-    def __init__(self, api_key: str, *, api_kind: ApiKind = ApiKind.REST) -> None:
-        if api_kind is ApiKind.GRAPHQL:
-            raise NotImplementedError("The GraphQL API is not yet implemented; use ApiKind.REST.")
+    def __init__(self, api_key: str) -> None:
         self._credentials = Credentials(api_key=api_key)
-        self._api_kind = api_kind
 
-    @property
-    def api_kind(self) -> ApiKind:
-        """The Octopus Energy API this client talks to."""
-        return self._api_kind
+    @abstractmethod
+    def get_consumption(
+        self,
+        mpan: str,
+        serial_number: str,
+        *,
+        period_from: datetime | None = None,
+        period_to: datetime | None = None,
+    ) -> list[Consumption]:
+        """Return electricity consumption readings for a meter.
+
+        ``period_from`` and ``period_to`` bound the window (inclusive of
+        ``period_from``, exclusive of ``period_to``). Pass timezone-aware
+        datetimes. ``period_to`` requires ``period_from``.
+        """
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release any network resources held by the client."""
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class Client(BaseClient):
+    """Talks to the Octopus Energy REST API using HTTP Basic auth.
+
+    The API key is sent as the Basic-auth username with a blank password.
+    """
+
+    def __init__(self, api_key: str) -> None:
+        super().__init__(api_key)
+        self._http = httpx.Client(
+            base_url=OCTOPUS_REST_BASE_URL,
+            auth=(self._credentials.api_key, ""),
+        )
+
+    def get_consumption(
+        self,
+        mpan: str,
+        serial_number: str,
+        *,
+        period_from: datetime | None = None,
+        period_to: datetime | None = None,
+    ) -> list[Consumption]:
+        path = f"/v1/electricity-meter-points/{mpan}/meters/{serial_number}/consumption/"
+        params: dict[str, str] = {}
+        if period_from is not None:
+            params["period_from"] = period_from.isoformat()
+        if period_to is not None:
+            params["period_to"] = period_to.isoformat()
+        results = self._get_paginated_results(path, params=params)
+        return [Consumption.model_validate(item) for item in results]
+
+    def _get_json(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
+        """Send an authenticated GET request and return the parsed JSON body."""
+        try:
+            response = self._http.get(path, params=params)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SquidinkAPIError(f"Octopus API request failed: {exc}") from exc
+        return response.json()
+
+    def _get_paginated_results(
+        self, path: str, *, params: Mapping[str, Any] | None = None
+    ) -> list[Any]:
+        """Follow ``next`` links and return every result item across all pages."""
+        data = self._get_json(path, params=params)
+        items: list[Any] = list(data["results"])
+        next_url = data.get("next")
+        while next_url:
+            data = self._get_json(next_url)
+            items.extend(data["results"])
+            next_url = data.get("next")
+        return items
+
+    def close(self) -> None:
+        self._http.close()
