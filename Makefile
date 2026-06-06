@@ -1,10 +1,11 @@
-.PHONY: help install-dev test lint fmt build clean
+.PHONY: help install-dev install-examples test lint fmt build clean
 
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
 help:
 	@echo "make install-dev   - install the package (editable) + dev deps into .venv"
+	@echo "make install-examples - install the package + examples deps (jupyter, dotenv)"
 	@echo "make test          - run pytest"
 	@echo "make lint          - run ruff check + ruff format --check"
 	@echo "make fmt           - run ruff format + ruff check --fix"
@@ -15,6 +16,10 @@ install-dev:
 	$(PIP) install --upgrade pip
 	$(PIP) install -e .
 	$(PIP) install --group dev
+
+install-examples:
+	$(PIP) install -e .
+	$(PIP) install --group examples
 
 test:
 	$(PY) -m pytest
