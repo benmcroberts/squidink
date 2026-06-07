@@ -30,6 +30,9 @@ classifiers = [
   "Typing :: Typed",
 ]
 
+[project.optional-dependencies]
+pandas = ["pandas>=2"]
+
 [project.urls]
 Homepage = "https://github.com/benmcroberts/squidink"
 Issues = "https://github.com/benmcroberts/squidink/issues"
@@ -53,6 +56,7 @@ examples = [
   "nbstripout>=0.7",
   "python-dotenv>=1",
   "plotly>=5",
+  "pandas>=2",
 ]
 
 [tool.ruff]

@@ -3,15 +3,22 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
 from squidink.credentials import Credentials
+from squidink.enums import Granularity
 from squidink.exceptions import SquidinkAPIError
-from squidink.models import Consumption
+from squidink.models import ConsumptionReading
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 OCTOPUS_REST_BASE_URL = "https://api.octopus.energy"
+
+# Largest page Octopus will return; used internally to minimise round-trips.
+_MAX_PAGE_SIZE = 25000
 
 
 class BaseClient(ABC):
@@ -25,20 +32,59 @@ class BaseClient(ABC):
         self._credentials = Credentials(api_key=api_key)
 
     @abstractmethod
-    def get_consumption(
+    def get_consumption_readings(
+        self,
+        mpan: str,
+        serial_number: str,
+        *,
+        granularity: Granularity = Granularity.HALF_HOURLY,
+        period_from: datetime | None = None,
+        period_to: datetime | None = None,
+    ) -> list[ConsumptionReading]:
+        """Return electricity consumption readings for a meter, oldest first.
+
+        ``granularity`` controls aggregation (default: raw half-hourly).
+        ``period_from`` and ``period_to`` bound the window (inclusive of
+        ``period_from``, exclusive of ``period_to``); pass timezone-aware
+        datetimes. ``period_to`` requires ``period_from``.
+        """
+
+    def get_consumption_series(
         self,
         mpan: str,
         serial_number: str,
         *,
         period_from: datetime | None = None,
         period_to: datetime | None = None,
-    ) -> list[Consumption]:
-        """Return electricity consumption readings for a meter.
+        granularity: Granularity = Granularity.HALF_HOURLY,
+    ) -> "pd.Series":
+        """Return consumption as a pandas Series indexed by interval start.
 
-        ``period_from`` and ``period_to`` bound the window (inclusive of
-        ``period_from``, exclusive of ``period_to``). Pass timezone-aware
-        datetimes. ``period_to`` requires ``period_from``.
+        Requires the optional ``pandas`` dependency:
+        ``pip install 'squidink[pandas]'``.
         """
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError(
+                "get_consumption_series requires pandas. "
+                "Install it with: pip install 'squidink[pandas]'"
+            ) from exc
+
+        readings = self.get_consumption_readings(
+            mpan,
+            serial_number,
+            granularity=granularity,
+            period_from=period_from,
+            period_to=period_to,
+        )
+        # Readings are already Europe/London-aware, so pandas builds a
+        # tz-aware DatetimeIndex directly.
+        return pd.Series(
+            data=[r.consumption for r in readings],
+            index=[r.interval_start for r in readings],
+            name="consumption",
+        )
 
     @abstractmethod
     def close(self) -> None:
@@ -64,22 +110,27 @@ class Client(BaseClient):
             auth=(self._credentials.api_key, ""),
         )
 
-    def get_consumption(
+    def get_consumption_readings(
         self,
         mpan: str,
         serial_number: str,
         *,
+        granularity: Granularity = Granularity.HALF_HOURLY,
         period_from: datetime | None = None,
         period_to: datetime | None = None,
-    ) -> list[Consumption]:
+    ) -> list[ConsumptionReading]:
         path = f"/v1/electricity-meter-points/{mpan}/meters/{serial_number}/consumption/"
-        params: dict[str, str] = {}
+        params: dict[str, str] = {"page_size": str(_MAX_PAGE_SIZE)}
+        if granularity is not Granularity.HALF_HOURLY:
+            params["group_by"] = granularity.value
         if period_from is not None:
             params["period_from"] = period_from.isoformat()
         if period_to is not None:
             params["period_to"] = period_to.isoformat()
         results = self._get_paginated_results(path, params=params)
-        return [Consumption.model_validate(item) for item in results]
+        readings = [ConsumptionReading.model_validate(item) for item in results]
+        readings.sort(key=lambda r: r.interval_start)
+        return readings
 
     def _get_json(self, path: str, *, params: Mapping[str, Any] | None = None) -> Any:
         """Send an authenticated GET request and return the parsed JSON body."""
